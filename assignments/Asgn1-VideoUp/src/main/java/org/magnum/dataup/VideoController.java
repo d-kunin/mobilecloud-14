@@ -160,10 +160,12 @@ public class VideoController {
 		}
 	}
 	
+	@SuppressWarnings("serial")
 	@ResponseStatus(value = HttpStatus.NOT_FOUND)
 	private static class Http404 extends RuntimeException {	
 	}
 	
+	@SuppressWarnings("serial")
 	@ResponseStatus(value = HttpStatus.INTERNAL_SERVER_ERROR)
 	private static class Http500 extends RuntimeException {	
 	}
