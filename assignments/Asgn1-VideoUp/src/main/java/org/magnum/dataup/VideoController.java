@@ -26,23 +26,21 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.magnum.dataup.model.Video;
+import org.magnum.dataup.model.VideoStatus;
 import org.magnum.dataup.model.VideoStatus.VideoState;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 
-import retrofit.http.Body;
-import retrofit.http.Multipart;
 @Controller
 public class VideoController {
 
@@ -68,18 +66,16 @@ public class VideoController {
 	public static final String VIDEO_DATA_PATH = "/video/{id}/data";
 	
 	private final ConcurrentHashMap<Long, Video> mVideos = new ConcurrentHashMap<>();
-	
 	private final AtomicLong mIds = new AtomicLong();
 
-	// /video
-	
+
 	@RequestMapping(value=VIDEO_PATH, method=RequestMethod.GET)
 	public @ResponseBody Collection<Video> getVideoList() {
 		return mVideos.values();
 	}
 	
 	@RequestMapping(value=VIDEO_PATH, method=RequestMethod.POST)
-	public @ResponseBody Video addVideo(@Body Video v) {
+	public @ResponseBody Video addVideo(@RequestBody Video v) {
 		
 		final long currentId = mIds.incrementAndGet();
 		v.setId(currentId);
@@ -89,51 +85,51 @@ public class VideoController {
 		return v;
 	}
 	
-	// /video/{id}/data
 	
 	@RequestMapping(value=VIDEO_DATA_PATH, method=RequestMethod.POST)
-	public VideoState save(@RequestPart("data") MultipartFile file, 
-						   @PathVariable("id") long id) 
+	public @ResponseBody VideoStatus save(
+						@RequestParam("data") MultipartFile file, 
+						@PathVariable("id") long id) 
 	{
 		final Video video = mVideos.get(id);
 		if (video == null) {
-			throw new HttpClientErrorException(HttpStatus.BAD_REQUEST);
+			send404();
+		} else {
+			try {
+				VideoFileManager.get().saveVideoData(video, file.getInputStream());
+			} catch (IOException e) {
+				send500();
+			}
 		}
 		
-		try {
-			VideoFileManager.get().saveVideoData(video, file.getInputStream());
-		} catch (IOException e) {
-			throw new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR);
-		}
-		
-		return VideoState.READY;
+		return new VideoStatus(VideoState.READY);
 	}
 	
+	private void send500() {
+		throw new Http500();
+	}
+
+	private void send404() {
+		throw new Http404();
+	}
+
 	@RequestMapping(value=VIDEO_DATA_PATH, method=RequestMethod.GET)
-	public void getVideo(@PathVariable("id") String id,
+	public void getVideo(@PathVariable("id") long id,
 					     HttpServletResponse response) 
 	{
 		final Video video = mVideos.get(id);
 		if (video == null) {
+			send404(id, response);
+		} else {
 			try {
-				response.sendError(HttpStatus.BAD_REQUEST.value(), "Video not found: " + id);
+				VideoFileManager.get().copyVideoData(video, response.getOutputStream());
+				response.flushBuffer();
 			} catch (IOException e) {
-				e.printStackTrace();
-			}
-			return;
-		}
-		
-		try {
-			VideoFileManager.get().copyVideoData(video, response.getOutputStream());
-		} catch (IOException e) {
-			try {
-				response.sendError(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to stream video: " + id);
-			} catch (IOException e1) {
-				e1.printStackTrace();
+				send500(id, response);
 			}
 		}
 	}
-	
+
 	// utility stuff
     private String getDataUrl(long videoId){
         String url = getUrlBaseForLocalServer() + "/video/" + videoId + "/data";
@@ -146,5 +142,29 @@ public class VideoController {
 	   String base = 
 	      "http://" + request.getServerName() + ((request.getServerPort() != 80) ? ":" + request.getServerPort() : "");
 	   return base;
+	}
+ 	
+	private void send404(long id, HttpServletResponse response) {
+		try {
+			response.sendError(HttpStatus.NOT_FOUND.value(), "Video not found: " + id);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void send500(long id, HttpServletResponse response) {
+		try {
+			response.sendError(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Failed to stream video: " + id);
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+	}
+	
+	@ResponseStatus(value = HttpStatus.NOT_FOUND)
+	private static class Http404 extends RuntimeException {	
+	}
+	
+	@ResponseStatus(value = HttpStatus.INTERNAL_SERVER_ERROR)
+	private static class Http500 extends RuntimeException {	
 	}
 }
